@@ -31,3 +31,9 @@ env/
 # .vscode
 .vscode/
 .coverage
+
+# uv 
+uv.lock
+
+# files
+docs/
