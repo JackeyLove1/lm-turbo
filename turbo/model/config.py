@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Literal
 
+import torch
 from transformers import PretrainedConfig
 
 
@@ -29,9 +30,7 @@ class ModelConfig:
     num_kv_heads: int
     head_dim: int
     hidden_size: int
-    vocab_size: int
     intermediate_size: int
-    rms_norm_eps: float
     rotary_config: RotaryConfig
     hidden_act: HiddenAct
     tie_word_embeddings: bool
@@ -40,7 +39,27 @@ class ModelConfig:
     moe_intermediate_size: int
     norm_topk_prob: bool
     model_type: Literal["moe", "qwen3", "llama"]
-    architectures: List[str]
+    architectures: List[str] = ["Qwen3ForCausalLM"]
+    attention_bias: bool = False
+    attention_dropout: float = 0.0
+    bos_token_id: int = 151643
+    eos_token_id: int = 151645
+    initializer_range: int = 0.02
+    max_position_embeddings: int = 40960
+    max_window_layers: int = 28
+    num_attention_heads: int = 16
+    num_hidden_layers: int = 28
+    num_key_value_heads: int = 8
+    rms_norm_eps: float = 1e-6
+    rope_scaling: str | None = None
+    rope_theta: float = 1000000.0
+    sliding_window: str | None = None
+    tie_word_embeddings: bool = True
+    torch_dtype: torch.dtype = torch.bfloat16
+    use_sliding_window: bool = False
+    vocab_size: int = 151936
+    use_qk_norm: bool = True
+
 
     @property
     def is_moe(self) -> bool:
@@ -53,7 +72,7 @@ class ModelConfig:
         tie_word_embeddings = getattr(config, "tie_word_embeddings", False)
         model_type = getattr(config, "model_type", "qwen3")
         num_experts = getattr(config, "num_local_experts", getattr(config, "num_experts", 0))
-        num_experts_per_tok = getattr(config, "num_experts_per_tok", 0)
+        num_experts_per_token = getattr(config, "num_experts_per_token", 0)
         moe_intermediate_size = getattr(config, "moe_intermediate_size", 0)
         norm_topk_prob = getattr(config, "norm_topk_prob", False)
         architectures = getattr(config, "architectures", ["LlamaForCausalLM"])
@@ -77,7 +96,7 @@ class ModelConfig:
                 scaling=getattr(config, "rope_scaling", None),
             ),
             num_experts=num_experts,
-            num_experts_per_tok=num_experts_per_tok,
+            num_experts_per_token=num_experts_per_token,
             moe_intermediate_size=moe_intermediate_size,
             norm_topk_prob=norm_topk_prob,
             model_type=model_type,

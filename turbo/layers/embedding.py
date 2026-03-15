@@ -1,27 +1,26 @@
 from __future__ import annotations
 
-import torch
-import torch.nn.functional as F
+import torch.nn as nn
 
-from turbo.layers.base import BaseOp
+from turbo.model.config import ModelConfig
+from turbo.utils.typing import Tensor2D, Tensor3D
 
 
-class VocabEmbeddingLayer(BaseOp):
+class EmbeddingLayer(nn.Module):
     def __init__(
         self,
-        vocab_size: int,
-        embedding_dim: int,
+        config: ModelConfig
     ):
         super().__init__()
-        self.weight = torch.empty(vocab_size, embedding_dim)
+        self.embedding = nn.Embedding(config.vocab_size, config.head_dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return F.embedding(x, self.weight)
+    def forward(self, x: Tensor2D) -> Tensor3D:
+        return self.embedding(x)
 
-class LMHeadLayer(BaseOp):
-    def __init__(self, embedding_dim: int, vocab_size: int):
+class LMHeadLayer(nn.Module):
+    def __init__(self, config: ModelConfig) -> None:
         super().__init__()
-        self.weight = torch.empty(vocab_size, embedding_dim)
+        self.linear = nn.Linear(config.head_dim, config.vocab_size)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return F.linear(x, self.weight)
+    def forward(self, x: Tensor3D) -> Tensor2D:
+        return self.linear(x)
