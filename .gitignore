@@ -37,3 +37,6 @@ uv.lock
 
 # files
 docs/
+
+# Jetbrain
+.idea/
