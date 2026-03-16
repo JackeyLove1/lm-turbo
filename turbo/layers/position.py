@@ -57,7 +57,7 @@ class RotaryEmbedding(nn.Module):
         emb = torch.cat((freqs, freqs), dim=-1)
         cos_cached = emb.cos().unsqueeze(0).unsqueeze(0)
         sin_cached = emb.sin().unsqueeze(0).unsqueeze(0)
-        return cos_cached, sin_cached
+        return cos_cached.cuda(), sin_cached.cuda()
 
     @staticmethod
     def rotate_half(x: AttentionTensor) -> AttentionTensor:

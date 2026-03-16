@@ -216,8 +216,16 @@ def remap_hf_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.
         if key.endswith("rotary_emb.inv_freq"):
             remapped_state_dict.pop(key)
 
-    if "lm_head.weight" not in remapped_state_dict and "model.embed_tokens.weight" in remapped_state_dict:
-        remapped_state_dict["lm_head.weight"] = remapped_state_dict["model.embed_tokens.weight"]
+    top_level_key_mapping = {
+        "model.embed_tokens.weight": "embed_tokens.weight",
+        "model.norm.weight": "norm.weight",
+    }
+    for source_key, target_key in top_level_key_mapping.items():
+        if source_key in remapped_state_dict and target_key not in remapped_state_dict:
+            remapped_state_dict[target_key] = remapped_state_dict.pop(source_key)
+
+    if "lm_head.weight" not in remapped_state_dict and "embed_tokens.weight" in remapped_state_dict:
+        remapped_state_dict["lm_head.weight"] = remapped_state_dict["embed_tokens.weight"]
 
     return remapped_state_dict
 
