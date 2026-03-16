@@ -12,11 +12,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import PretrainedConfig
 
-from turbo.kvcache.base import KVCache
-
 if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parent.parent))
 
+from turbo.kvcache.base import KVCache
 from turbo.layers.attention import GroupedAttentionLayer
 from turbo.layers.embedding import EmbeddingLayer, LMHeadLayer
 from turbo.layers.mlp import DenseMLP
@@ -47,13 +46,15 @@ class Qwen3Decoder(nn.Module):
         past_kv_cache: Optional[KVCache] = None,
         use_cache: bool = True,
     ) -> Tuple[Tensor3D, Optional[KVCache]]:
-
-        if use_cache:
-            assert past_kv_cache is not None, "past_kv_cache is required when use_cache is True"
-
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states, past_kv_cache = self.self_attn(hidden_states, attention_mask, position_ids, past_kv_cache)
+        hidden_states, past_kv_cache = self.self_attn(
+            hidden_states,
+            attention_mask,
+            position_ids,
+            past_kv_cache,
+            use_cache,
+        )
         hidden_states = hidden_states + residual
 
         residual = hidden_states
@@ -76,14 +77,23 @@ class Qwen3Model(nn.Module):
         past_kv_cache: Optional[List[Optional[KVCache]]] = None,
         use_cache: bool = True,
     ) -> Tuple[Tensor3D, Optional[List[Optional[KVCache]]]]:
-        if past_kv_cache is None and use_cache:
+        if past_kv_cache is None:
             past_kv_cache = [None] * len(self.layers)
         assert len(past_kv_cache) == len(self.layers), "past_kv_cache must have the same length as layers"
 
+        new_past_kv_cache = [] if use_cache else None
         for layer, past_kv_cache_i in zip(self.layers, past_kv_cache):
-            hidden_states, past_kv_cache_i = layer(hidden_states, attention_mask, position_ids, past_kv_cache_i, use_cache)
+            hidden_states, updated_kv_cache = layer(
+                hidden_states,
+                attention_mask,
+                position_ids,
+                past_kv_cache_i,
+                use_cache,
+            )
+            if use_cache and new_past_kv_cache is not None:
+                new_past_kv_cache.append(updated_kv_cache)
 
-        return hidden_states, past_kv_cache
+        return hidden_states, new_past_kv_cache
 
 
 class Qwen3ForCausalLM(nn.Module):
@@ -95,7 +105,28 @@ class Qwen3ForCausalLM(nn.Module):
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.lm_head = LMHeadLayer(config)
         if config.tie_word_embeddings:
-            self.lm_head.weight = self.model.embed_tokens.weight
+            self.lm_head.weight = self.embed_tokens.weight
+
+    @staticmethod
+    def _get_past_seq_len(past_kv_cache: Optional[List[Optional[KVCache]]]) -> int:
+        if not past_kv_cache:
+            return 0
+        first_cache = next((cache for cache in past_kv_cache if cache is not None), None)
+        return 0 if first_cache is None else first_cache.seq_len
+
+    def build_position_ids(
+        self,
+        input_ids: Tensor2D,
+        past_kv_cache: Optional[List[Optional[KVCache]]] = None,
+    ) -> torch.Tensor:
+        past_seq_len = self._get_past_seq_len(past_kv_cache)
+        _, seq_len = input_ids.shape
+        return torch.arange(
+            past_seq_len,
+            past_seq_len + seq_len,
+            device=input_ids.device,
+            dtype=torch.long,
+        ).unsqueeze(0).expand(input_ids.shape[0], -1)
 
 
     def forward(
@@ -121,9 +152,17 @@ class Qwen3ForCausalLM(nn.Module):
     ) -> torch.Tensor:
         generated = input_ids.clone()
         eos_token_id = self.config.eos_token_id if eos_token_id is None else eos_token_id
+        past_kv_cache = None
+        current_input_ids = input_ids
 
         for _ in range(max_new_tokens):
-            logits = self.forward(generated)  # [batch, seq, vocab]
+            position_ids = self.build_position_ids(current_input_ids, past_kv_cache)
+            logits, past_kv_cache = self.forward(
+                current_input_ids,
+                position_ids=position_ids,
+                past_kv_cache=past_kv_cache,
+                use_cache=True,
+            )
             next_logits = logits[:, -1, :]  # [batch, vocab]
 
             if temperature <= 0:
@@ -139,6 +178,7 @@ class Qwen3ForCausalLM(nn.Module):
                 next_token = sorted_ids.gather(-1, torch.multinomial(sorted_probs, 1))
 
             generated = torch.cat([generated, next_token], dim=-1)
+            current_input_ids = next_token
             if eos_token_id is not None and torch.all(next_token == eos_token_id):
                 break
 
@@ -278,7 +318,7 @@ def run_gpu_test(model_path: str = "models/Qwen/Qwen3-0.6B", max_new_tokens: int
     print(f"Input: {prompt!r} (shape {inputs.shape})")
 
     with torch.no_grad():
-        logits = model(inputs)
+        logits, _ = model(inputs, position_ids=model.build_position_ids(inputs), use_cache=False)
     print(f"Forward OK: logits shape {logits.shape}")
 
     generated = model.generate(inputs, max_new_tokens=max_new_tokens, temperature=0.7, top_p=0.9)

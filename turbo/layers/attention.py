@@ -51,7 +51,8 @@ class GroupedAttentionLayer(nn.Module):
         hidden_states: Tensor3D,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
-        kv_cache: Optional[KVCache] = None
+        kv_cache: Optional[KVCache] = None,
+        use_cache: bool = True,
     ) -> Tuple[Tensor3D, Optional[KVCache]]:
 
         B, S, _ = hidden_states.shape
@@ -71,11 +72,16 @@ class GroupedAttentionLayer(nn.Module):
         q = self.rotary_emb(q, position_ids)
         k = self.rotary_emb(k, position_ids)
 
-        if kv_cache is not None:
+        if kv_cache is None: # prefill
+            kv_cache = KVCache(k=k, v=v)
+        else: # decode
             k, v = kv_cache.update(k, v)
-            is_casual = False
-        else:
-            is_casual = (attention_mask is None)
+
+        attn_mask = attention_mask
+        is_causal = False
+        if attn_mask is None:
+            # prefill: use is_causal; decode (S=1): causal mask is redundant, is_causal suffices
+            is_causal = True
 
         # use grouped attention
         if self.num_kv_groups > 1:
@@ -84,9 +90,9 @@ class GroupedAttentionLayer(nn.Module):
 
         out = F.scaled_dot_product_attention(
             q, k, v,
-            attn_mask=attention_mask,
-            is_causal=is_casual,
+            attn_mask=attn_mask,
+            is_causal=is_causal,
         )
 
         out = out.transpose(1, 2).contiguous().view(B, S, self.num_heads * self.head_dim)
-        return self.o_proj(out)
+        return self.o_proj(out), kv_cache if use_cache else None
