@@ -5,12 +5,14 @@ import glob
 import json
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import PretrainedConfig
+
+from turbo.kvcache.base import KVCache
 
 if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -42,11 +44,16 @@ class Qwen3Decoder(nn.Module):
         hidden_states: Tensor3D,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
-    ) -> Tensor3D:
+        past_kv_cache: Optional[KVCache] = None,
+        use_cache: bool = True,
+    ) -> Tuple[Tensor3D, Optional[KVCache]]:
+
+        if use_cache:
+            assert past_kv_cache is not None, "past_kv_cache is required when use_cache is True"
 
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(hidden_states, attention_mask, position_ids)
+        hidden_states, past_kv_cache = self.self_attn(hidden_states, attention_mask, position_ids, past_kv_cache)
         hidden_states = hidden_states + residual
 
         residual = hidden_states
@@ -54,33 +61,38 @@ class Qwen3Decoder(nn.Module):
         hidden_states = self.mlp(hidden_states)
         hidden_states = hidden_states + residual
 
-        return hidden_states
+        return hidden_states, past_kv_cache
 
 class Qwen3Model(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
-        self.embed_tokens = EmbeddingLayer(config)
         self.layers = nn.ModuleList([Qwen3Decoder(config) for _ in range(config.num_layers)])
-        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
         self,
-        input_ids: Tensor2D,
+        hidden_states: Tensor3D,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
-    ) -> Tensor3D:
-        hidden_states = self.embed_tokens(input_ids)
-        for layer in self.layers:
-            hidden_states = layer(hidden_states, attention_mask, position_ids)
+        past_kv_cache: Optional[List[Optional[KVCache]]] = None,
+        use_cache: bool = True,
+    ) -> Tuple[Tensor3D, Optional[List[Optional[KVCache]]]]:
+        if past_kv_cache is None and use_cache:
+            past_kv_cache = [None] * len(self.layers)
+        assert len(past_kv_cache) == len(self.layers), "past_kv_cache must have the same length as layers"
 
-        return self.norm(hidden_states)
+        for layer, past_kv_cache_i in zip(self.layers, past_kv_cache):
+            hidden_states, past_kv_cache_i = layer(hidden_states, attention_mask, position_ids, past_kv_cache_i, use_cache)
+
+        return hidden_states, past_kv_cache
 
 
 class Qwen3ForCausalLM(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = config
+        self.embed_tokens = EmbeddingLayer(config)
         self.model = Qwen3Model(config)
+        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.lm_head = LMHeadLayer(config)
         if config.tie_word_embeddings:
             self.lm_head.weight = self.model.embed_tokens.weight
@@ -91,9 +103,12 @@ class Qwen3ForCausalLM(nn.Module):
         input_ids: Tensor2D,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
-    ) -> Tensor3D:
-        hidden_states = self.model(input_ids, attention_mask, position_ids)
-        return self.lm_head(hidden_states)
+        past_kv_cache: Optional[List[Optional[KVCache]]] = None,
+        use_cache: bool = True,
+    ) -> Tuple[Tensor3D, Optional[List[Optional[KVCache]]]]:
+        hidden_states = self.embed_tokens(input_ids)
+        hidden_states, new_past_kv_cache = self.model(hidden_states, attention_mask, position_ids, past_kv_cache, use_cache)
+        return self.lm_head(self.norm(hidden_states)), new_past_kv_cache
 
     @torch.no_grad()
     def generate(
@@ -258,7 +273,7 @@ def run_gpu_test(model_path: str = "models/Qwen/Qwen3-0.6B", max_new_tokens: int
     model = load_model_from_hf(model_path, device=device)
     tokenizer = load_tokenizer(model_path)
 
-    prompt = "Hello, how are you?"
+    prompt = "写一段python快速排序的代码"
     inputs = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
     print(f"Input: {prompt!r} (shape {inputs.shape})")
 

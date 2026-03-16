@@ -1,9 +1,10 @@
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from turbo.kvcache.base import KVCache
 from turbo.layers.norm import RMSNorm
 from turbo.layers.position import RotaryEmbedding
 from turbo.model.config import ModelConfig
@@ -50,7 +51,8 @@ class GroupedAttentionLayer(nn.Module):
         hidden_states: Tensor3D,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
-    ) -> Tensor3D:
+        kv_cache: Optional[KVCache] = None
+    ) -> Tuple[Tensor3D, Optional[KVCache]]:
 
         B, S, _ = hidden_states.shape
 
@@ -69,6 +71,12 @@ class GroupedAttentionLayer(nn.Module):
         q = self.rotary_emb(q, position_ids)
         k = self.rotary_emb(k, position_ids)
 
+        if kv_cache is not None:
+            k, v = kv_cache.update(k, v)
+            is_casual = False
+        else:
+            is_casual = (attention_mask is None)
+
         # use grouped attention
         if self.num_kv_groups > 1:
             k = k.repeat_interleave(self.num_kv_groups, dim=1)
@@ -77,8 +85,7 @@ class GroupedAttentionLayer(nn.Module):
         out = F.scaled_dot_product_attention(
             q, k, v,
             attn_mask=attention_mask,
-            dropout_p=self.attention_dropout if self.training else 0.0,
-            is_causal=(attention_mask is None),
+            is_causal=is_casual,
         )
 
         out = out.transpose(1, 2).contiguous().view(B, S, self.num_heads * self.head_dim)
