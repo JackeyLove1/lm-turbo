@@ -72,6 +72,8 @@ class GroupedAttentionLayer(nn.Module):
         q = self.rotary_emb(q, position_ids)
         k = self.rotary_emb(k, position_ids)
 
+        had_kv_cache = kv_cache is not None
+
         if kv_cache is None: # prefill
             kv_cache = KVCache(k=k, v=v)
         else: # decode
@@ -80,8 +82,11 @@ class GroupedAttentionLayer(nn.Module):
         attn_mask = attention_mask
         is_causal = False
         if attn_mask is None:
-            # prefill: use is_causal; decode (S=1): causal mask is redundant, is_causal suffices
-            is_causal = True
+            # Only the prefill path needs a causal mask.
+            # In decode with KV cache, q_len is usually 1 while k_len keeps growing.
+            # Passing is_causal=True there masks against the wrong key positions and
+            # breaks generation after the first new token.
+            is_causal = not had_kv_cache
 
         # use grouped attention
         if self.num_kv_groups > 1:
