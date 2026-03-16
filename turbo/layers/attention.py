@@ -22,24 +22,28 @@ class GroupedAttentionLayer(nn.Module):
        config: ModelConfig
     ):
         super().__init__()
-        self.num_heads = config.num_attention_heads
-        self.num_kv_heads = config.num_key_value_heads
+        self.num_heads = config.num_qo_heads
+        self.num_kv_heads = config.num_kv_heads
         self.head_dim = config.head_dim
+        self.hidden_size = config.hidden_size
         self.num_kv_groups = self.num_heads // self.num_kv_heads  # GQA groups
+        self.attention_dropout = config.attention_dropout
 
-        self.q_proj = nn.Linear(config.hidden_size, self.num_heads * config.head_dim)
-        self.k_proj = nn.Linear(config.hidden_size, self.num_kv_heads * config.head_dim)
-        self.v_proj = nn.Linear(config.hidden_size, self.num_kv_heads * config.head_dim)
+        if self.num_heads % self.num_kv_heads != 0:
+            raise ValueError("num_qo_heads must be divisible by num_kv_heads for grouped attention")
 
-        self.emb = RotaryEmbedding(config)
+        self.q_proj = nn.Linear(config.hidden_size, self.num_heads * config.head_dim, bias=config.attention_bias)
+        self.k_proj = nn.Linear(config.hidden_size, self.num_kv_heads * config.head_dim, bias=config.attention_bias)
+        self.v_proj = nn.Linear(config.hidden_size, self.num_kv_heads * config.head_dim, bias=config.attention_bias)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, config.hidden_size, bias=config.attention_bias)
+
+        self.rotary_emb = RotaryEmbedding(config)
 
         if config.use_qk_norm:
-            self.q_norm = RMSNorm(config)
-            self.k_norm = RMSNorm(config)
+            self.q_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+            self.k_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         else:
             self.q_norm = self.k_norm = None
-
-        self.scale = config.head_dim ** -0.5
 
     def forward(
         self,
@@ -62,8 +66,8 @@ class GroupedAttentionLayer(nn.Module):
             q = self.q_norm(q)
             k = self.k_norm(k)
 
-        q = self.emb.apply_rotary_pos_emb(q, position_ids)
-        k = self.emb.apply_rotary_pos_emb(k, position_ids)
+        q = self.rotary_emb(q, position_ids)
+        k = self.rotary_emb(k, position_ids)
 
         # use grouped attention
         if self.num_kv_groups > 1:
@@ -73,8 +77,9 @@ class GroupedAttentionLayer(nn.Module):
         out = F.scaled_dot_product_attention(
             q, k, v,
             attn_mask=attention_mask,
+            dropout_p=self.attention_dropout if self.training else 0.0,
             is_causal=(attention_mask is None),
         )
 
         out = out.transpose(1, 2).contiguous().view(B, S, self.num_heads * self.head_dim)
-        return out
+        return self.o_proj(out)

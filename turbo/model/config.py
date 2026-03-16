@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Literal
 
@@ -39,22 +39,16 @@ class ModelConfig:
     moe_intermediate_size: int
     norm_topk_prob: bool
     model_type: Literal["moe", "qwen3", "llama"]
-    architectures: List[str] = ["Qwen3ForCausalLM"]
+    architectures: List[str] = field(default_factory=lambda: ["Qwen3ForCausalLM"])
     attention_bias: bool = False
     attention_dropout: float = 0.0
+    mlp_bias: bool = False
     bos_token_id: int = 151643
     eos_token_id: int = 151645
     initializer_range: int = 0.02
-    max_position_embeddings: int = 40960
     max_window_layers: int = 28
-    num_attention_heads: int = 16
-    num_hidden_layers: int = 28
-    num_key_value_heads: int = 8
     rms_norm_eps: float = 1e-6
-    rope_scaling: str | None = None
-    rope_theta: float = 1000000.0
     sliding_window: str | None = None
-    tie_word_embeddings: bool = True
     torch_dtype: torch.dtype = torch.bfloat16
     use_sliding_window: bool = False
     vocab_size: int = 151936
@@ -65,17 +59,48 @@ class ModelConfig:
     def is_moe(self) -> bool:
         return self.model_type == "moe"
 
+    @property
+    def num_attention_heads(self) -> int:
+        return self.num_qo_heads
+
+    @property
+    def num_hidden_layers(self) -> int:
+        return self.num_layers
+
+    @property
+    def num_key_value_heads(self) -> int:
+        return self.num_kv_heads
+
+    @property
+    def max_position_embeddings(self) -> int:
+        return self.rotary_config.max_position
+
+    @property
+    def rope_theta(self) -> float:
+        return self.rotary_config.base
+
+    @property
+    def rope_scaling(self) -> Dict[str, Any] | None:
+        return self.rotary_config.scaling
+
     @classmethod
     def from_hf(cls, config: PretrainedConfig) -> ModelConfig:
         num_kv_heads = getattr(config, "num_key_value_heads", config.num_attention_heads)
         head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-        tie_word_embeddings = getattr(config, "tie_word_embeddings", False)
+        tie_word_embeddings = getattr(config, "tie_word_embeddings", True)
         model_type = getattr(config, "model_type", "qwen3")
         num_experts = getattr(config, "num_local_experts", getattr(config, "num_experts", 0))
         num_experts_per_token = getattr(config, "num_experts_per_token", 0)
         moe_intermediate_size = getattr(config, "moe_intermediate_size", 0)
         norm_topk_prob = getattr(config, "norm_topk_prob", False)
-        architectures = getattr(config, "architectures", ["LlamaForCausalLM"])
+        architectures = list(getattr(config, "architectures", ["Qwen3ForCausalLM"]))
+        hidden_act = getattr(config, "hidden_act", HiddenAct.SILU.value)
+        if not isinstance(hidden_act, HiddenAct):
+            hidden_act = HiddenAct(str(hidden_act))
+        rope_theta = getattr(config, "rope_theta", None)
+        if rope_theta is None:
+            rope_parameters = getattr(config, "rope_parameters", None) or {}
+            rope_theta = rope_parameters.get("rope_theta", 10000.0)
 
         return cls(
             num_layers=config.num_hidden_layers,
@@ -85,14 +110,14 @@ class ModelConfig:
             hidden_size=config.hidden_size,
             vocab_size=config.vocab_size,
             intermediate_size=config.intermediate_size,
-            hidden_act=config.hidden_act,
+            hidden_act=hidden_act,
             rms_norm_eps=config.rms_norm_eps,
             tie_word_embeddings=tie_word_embeddings,
             rotary_config=RotaryConfig(
                 head_dim=head_dim,
                 rotary_dim=head_dim,
                 max_position=config.max_position_embeddings,
-                base=config.rope_theta,
+                base=rope_theta,
                 scaling=getattr(config, "rope_scaling", None),
             ),
             num_experts=num_experts,
@@ -101,4 +126,15 @@ class ModelConfig:
             norm_topk_prob=norm_topk_prob,
             model_type=model_type,
             architectures=architectures,
+            attention_bias=getattr(config, "attention_bias", False),
+            attention_dropout=getattr(config, "attention_dropout", 0.0),
+            mlp_bias=getattr(config, "mlp_bias", False),
+            bos_token_id=getattr(config, "bos_token_id", 151643),
+            eos_token_id=getattr(config, "eos_token_id", 151645),
+            initializer_range=getattr(config, "initializer_range", 0.02),
+            max_window_layers=getattr(config, "max_window_layers", config.num_hidden_layers),
+            sliding_window=getattr(config, "sliding_window", None),
+            torch_dtype=getattr(config, "torch_dtype", torch.bfloat16),
+            use_sliding_window=getattr(config, "use_sliding_window", False),
+            use_qk_norm=getattr(config, "use_qk_norm", True),
         )

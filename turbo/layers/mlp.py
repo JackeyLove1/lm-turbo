@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -12,10 +11,9 @@ class DenseMLP(nn.Module):
     """SwiGLU FFN：out = down_proj(SiLU(gate_proj(x)) * up_proj(x))"""
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
-        self.gate_proj = nn.Linear(config.head_dim, config.intermediate_size)
-        self.up_proj = nn.Linear(config.head_dim, config.intermediate_size)
-        self.down_proj = nn.Linear(config.intermediate_size, config.head_dim)
+        self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=config.mlp_bias)
+        self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=config.mlp_bias)
+        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=config.mlp_bias)
 
-    @torch.compile
     def forward(self, x: Tensor3D) -> Tensor3D:
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))

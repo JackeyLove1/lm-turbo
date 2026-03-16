@@ -1,4 +1,3 @@
-
 import functools
 from typing import Tuple
 
@@ -48,31 +47,34 @@ class RotaryEmbedding(nn.Module):
 
         inv_freq = 1.0 / (config.rope_theta ** (torch.arange(0, config.head_dim, 2).float() / config.head_dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        self.cos_cached, self.sin_cached = get_rope_cache(inv_freq, config.rope_max_position_embeddings)
+        self.cos_cached, self.sin_cached = self._build_cache(config.max_position_embeddings)
+
+    def _build_cache(self, seq_len: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        freqs = torch.outer(
+            torch.arange(seq_len, device=self.inv_freq.device, dtype=self.inv_freq.dtype),
+            self.inv_freq,
+        )
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos_cached = emb.cos().unsqueeze(0).unsqueeze(0)
+        sin_cached = emb.sin().unsqueeze(0).unsqueeze(0)
+        return cos_cached, sin_cached
 
     @staticmethod
-    def apply_rotary_pos_emb(
-        x: AttentionTensor,
-        cos: torch.Tensor,
-        sin: torch.Tensor
-    ) -> AttentionTensor:
-        x1, x2 = torch.chunk(x.float(), 2, dim=-1)
-        y1 = x1 * cos - x2 * sin
-        y2 = x1 * sin + x2 * cos
-        return torch.cat((y1, y2), dim=-1).to(x.dtype)
+    def rotate_half(x: AttentionTensor) -> AttentionTensor:
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
 
-    def forward(
+    def apply_rotary_pos_emb(
         self,
         x: AttentionTensor,
-        position_ids: Tensor2D = None # [batch, seq_len] for sliding_window attention
+        position_ids: Tensor2D | None = None,
     ) -> AttentionTensor:
-        seq_len = x.shape[-2] # seq_len
-        cache_seq_len = seq_len
-        if position_ids is not None:
-            cache_seq_len = int(position_ids.max().item()) + 1
+        seq_len = x.shape[-2]
+        cache_seq_len = seq_len if position_ids is None else int(position_ids.max().item()) + 1
 
         if cache_seq_len > self.cos_cached.shape[2]:
-            self.cos_cached, self.sin_cached = get_rope_cache(self.inv_freq, cache_seq_len)
+            self.cos_cached, self.sin_cached = self._build_cache(cache_seq_len)
 
         if position_ids is None:
             cos = self.cos_cached[:, :, :seq_len, :]
@@ -81,4 +83,13 @@ class RotaryEmbedding(nn.Module):
             cos = self.cos_cached[0, 0, position_ids, :].unsqueeze(1)
             sin = self.sin_cached[0, 0, position_ids, :].unsqueeze(1)
 
-        return self.apply_rotary_pos_emb(x, cos, sin)
+        cos = cos.to(device=x.device, dtype=x.dtype)
+        sin = sin.to(device=x.device, dtype=x.dtype)
+        return x * cos + self.rotate_half(x) * sin
+
+    def forward(
+        self,
+        x: AttentionTensor,
+        position_ids: Tensor2D | None = None,
+    ) -> AttentionTensor:
+        return self.apply_rotary_pos_emb(x, position_ids)
