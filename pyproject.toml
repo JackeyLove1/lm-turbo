@@ -5,12 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "flashinfer-cubin>=0.6.6",
     "flashinfer-python>=0.6.6",
     "huggingface-hub>=1.7.1",
     "jaxtyping>=0.3.9",
     "loguru>=0.7.3",
     "modelscope>=1.35.0",
     "msgpack>=1.1.2",
+    "sgl-kernel>=0.3.21",
     "torch>=2.10.0",
     "transformers>=5.3.0",
     "triton>=3.6.0",

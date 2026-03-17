@@ -314,7 +314,7 @@ def load_model_from_hf(
         download_method=download_method,
     )
 
-def run_gpu_test(model_path: str = "models/Qwen/Qwen3-0.6B", max_new_tokens: int = 16) -> None:
+def run_gpu_test(model_path: str = "models/Qwen/Qwen3-0.6B", max_new_tokens: int = 128) -> None:
     """Load Qwen3 from local path and run a short forward + generate test on GPU."""
     device = torch.device("cuda")
     print(f"Loading model from {model_path} on {device}...")

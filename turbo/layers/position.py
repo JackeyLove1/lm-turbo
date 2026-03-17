@@ -61,8 +61,10 @@ class RotaryEmbedding(nn.Module):
 
     @staticmethod
     def rotate_half(x: AttentionTensor) -> AttentionTensor:
-        x1 = x[..., : x.shape[-1] // 2]
-        x2 = x[..., x.shape[-1] // 2 :]
+        # x1 = x[..., : x.shape[-1] // 2]
+        # x2 = x[..., x.shape[-1] // 2 :]
+        assert x.shape[-1] % 2 == 0, "x must have even number of dimensions"
+        x1, x2 = torch.chunk(x, 2, dim=-1)
         return torch.cat((-x2, x1), dim=-1)
 
     def apply_rotary_pos_emb(
