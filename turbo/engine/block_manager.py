@@ -89,7 +89,7 @@ class BlockManager:
             if block.ref_count == 0:
                 self._deallocate_block(block_id)
             assert block.ref_count >= 0, f"Block reference count is negative: {block.ref_count}"
-        seq.clear()
+        seq.block_table.clear()
 
     def can_append(self, seq: Sequence) -> bool:
         return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)

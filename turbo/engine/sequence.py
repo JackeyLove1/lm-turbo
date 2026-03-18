@@ -27,6 +27,8 @@ class Sequence:
         self.num_cached_tokens: int = 0
         self.block_table = []
         self.sampling_params = sampling_params or SamplingParams()
+        self.max_tokens = self.sampling_params.max_tokens
+        self.ignore_eos = self.sampling_params.ignore_eos
 
     def __len__(self):
         return self.num_tokens

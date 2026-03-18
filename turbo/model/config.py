@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, Literal
 
 import torch
-from transformers import PretrainedConfig
+from transformers import AutoConfig, PretrainedConfig
 
 
 class HiddenAct(Enum):
@@ -54,7 +54,21 @@ class ModelConfig:
     vocab_size: int = 151936
     use_qk_norm: bool = True
 
+    # hf config
+    hf_config: AutoConfig | None = None
+
+    # kvcache config
     kvcache_block_size: int = 32
+    num_kvcache_blocks: int = -1
+
+    # scheduler config
+    max_num_seqs: int = 512
+    max_num_batched_tokens: int = 32 * max_num_seqs
+    max_model_len: int = 4096
+    gpu_memory_utilization: float = 0.9
+    tensor_parallel_size: int = 1
+    enforce_eager: bool = False
+    eos: int = -1
 
 
     @property
