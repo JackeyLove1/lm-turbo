@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Literal
+from typing import Any, Literal
 
 import torch
 from transformers import PretrainedConfig
@@ -20,7 +20,7 @@ class RotaryConfig:
     rotary_dim: int
     max_position: int
     base: float = 10000.0
-    scaling: Dict[str, Any] | None = None
+    scaling: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,7 @@ class ModelConfig:
     moe_intermediate_size: int
     norm_topk_prob: bool
     model_type: Literal["moe", "qwen3", "llama"]
-    architectures: List[str] = field(default_factory=lambda: ["Qwen3ForCausalLM"])
+    architectures: list[str] = field(default_factory=lambda: ["Qwen3ForCausalLM"])
     attention_bias: bool = False
     attention_dropout: float = 0.0
     mlp_bias: bool = False
@@ -53,6 +53,8 @@ class ModelConfig:
     use_sliding_window: bool = False
     vocab_size: int = 151936
     use_qk_norm: bool = True
+
+    kvcache_block_size: int = 32
 
 
     @property
@@ -80,8 +82,11 @@ class ModelConfig:
         return self.rotary_config.base
 
     @property
-    def rope_scaling(self) -> Dict[str, Any] | None:
+    def rope_scaling(self) -> dict[str, Any] | None:
         return self.rotary_config.scaling
+
+    def __post__init__(self):
+        pass
 
     @classmethod
     def from_hf(cls, config: PretrainedConfig) -> ModelConfig:

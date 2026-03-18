@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Literal
+from typing import List, Literal, Optional
 from contextlib import contextmanager
 import torch
 
@@ -71,10 +71,21 @@ class Batch:
 
 @dataclass
 class Context:
+    # sglang mode
     page_size: int
     page_table: torch.Tensor = field(init=False)
     kv_cache: torch.Tensor = field(init=False)
     _batch: Batch | None = None = field(init=False)
+
+    # vllm mode
+    is_prefill: bool = False
+    cu_seqlens_q: Optional[int] = None
+    cu_seqlens_k: Optional[int] = None
+    max_seql_q: Optional[int] = None
+    max_seql_k: Optional[int] = None
+    slot_mapping: Optional[torch.Tensor] = None
+    context_lens: Optional[torch.Tensor] = None
+    block_tables: Optional[torch.Tensor] = None
 
     @property
     def batch(self) -> Batch:
