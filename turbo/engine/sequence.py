@@ -2,7 +2,7 @@ import copy
 from enum import Enum, auto
 from itertools import count
 
-from turbo.engine.core import SamplingParams
+from turbo.sampling_params import SamplingParams
 from turbo.utils.misc import div_ceil
 
 
@@ -51,22 +51,26 @@ class Sequence:
     @property
     def num_completion_tokens(self) -> int:
         """The number of completion tokens"""
-        return self.num_tokens - self.num_prompt_tokens
+        return self.num_tokens - self._num_prompt_tokens
+
+    @property
+    def completion_token_ids(self) -> list[int]:
+        return self.token_ids[self._num_prompt_tokens :]
 
     @property
     def num_cached_blocks(self) -> int:
         """The number of cached blocks"""
-        return self.num_tokens // self.block_size
+        return self._num_cached_tokens // self.block_size
 
     @property
     def num_cached_tokens(self) -> int:
         """The number of cached tokens"""
-        return self.num_cached_blocks * self.block_size
+        return self._num_cached_tokens
 
     @property
     def num_prompt_tokens(self) -> int:
         """The number of prompt tokens"""
-        return self.num_tokens - self.num_completion_tokens
+        return self._num_prompt_tokens
 
     @property
     def num_blocks(self) -> int:
@@ -97,7 +101,9 @@ class Sequence:
         self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.block_table = state[:-1]
         if self.num_completion_tokens == 0:
             self.token_ids = state[-1]
+            self.last_token = self.token_ids[-1]
         else:
+            self.token_ids = []
             self.last_token = state[-1]
 
     @num_prompt_tokens.setter

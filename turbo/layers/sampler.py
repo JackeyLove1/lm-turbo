@@ -14,7 +14,6 @@ class RandomSampler(Sampler):
     def __init__(self):
         super().__init__()
 
-    @torch.compile
     def forward(self, logits: torch.Tensor, temperatures: torch.Tensor) -> torch.Tensor:
         """
         x: [batch, vocab_size]

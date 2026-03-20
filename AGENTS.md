@@ -9,5 +9,5 @@ a LLM and VLM interface project like vllm and sglang for high performance interf
 # Env
 ## development env
 1. windows wsl
-2. uv venv python  3.12 
+2. uv venv python 3.12 
 3. NVIDIA 5060GPU, sm_120

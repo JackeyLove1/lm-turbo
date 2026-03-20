@@ -3,7 +3,7 @@ from time import perf_counter
 
 import torch.multiprocessing as mp
 from tqdm.auto import tqdm
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 
 from turbo.config import ModelConfig
 from turbo.engine.model_runner import ModelRunner
@@ -15,18 +15,25 @@ from turbo.utils.torch_utils import nvtx_annotate
 
 class LLMEngine:
 
-    def __init__(self, model: str, config: ModelConfig, **kwargs):
+    def __init__(self, model: str, config: ModelConfig | None = None, **kwargs):
+        if config is None:
+            config = ModelConfig.from_hf(AutoConfig.from_pretrained(model))
+        for key, value in kwargs.items():
+            if hasattr(config, key):
+                setattr(config, key, value)
+        config.max_num_seqs = min(config.max_num_seqs, 16)
+        config.max_num_batched_tokens = min(config.max_num_batched_tokens, 4096)
         self.ps = []
         self.events = []
         ctx = mp.get_context("spawn")
         for i in range(1, config.tensor_parallel_size):
             event = ctx.Event()
-            process = ctx.Process(target=ModelRunner, args=(config, i, event))
+            process = ctx.Process(target=ModelRunner, args=(model, config, i, event))
             process.start()
             self.ps.append(process)
             self.events.append(event)
-        self.model_runner = ModelRunner(config, 0, self.events)
-        self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
+        self.model_runner = ModelRunner(model, config, 0, self.events)
+        self.tokenizer = AutoTokenizer.from_pretrained(model, use_fast=True)
         config.eos = self.tokenizer.eos_token_id
         self.scheduler = Scheduler(config)
         atexit.register(self.exit)
@@ -53,7 +60,7 @@ class LLMEngine:
         return outputs, num_tokens
 
     def is_finished(self):
-        return self.scheduler.is_finished()
+        return self.scheduler.is_finished
 
     def generate(
         self,

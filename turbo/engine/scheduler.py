@@ -34,15 +34,17 @@ class Scheduler:
         # prefill first
         while self.waiting and num_seqs < self.max_num_seqs:
             seq = self.waiting[0]
-            if num_batched_tokens + len(seq) > self.max_num_batched_tokens or not self.block_manager.can_allocate(seq):
+            delta_tokens = len(seq) - seq.num_cached_tokens
+            if num_batched_tokens + delta_tokens > self.max_num_batched_tokens or not self.block_manager.can_allocate(seq):
                 break
             num_seqs += 1
             self.block_manager.allocate(seq)
-            num_batched_tokens += len(seq) - seq.num_cached_tokens
+            num_batched_tokens += delta_tokens
             seq.status = SequenceStatus.RUNNING
             self.waiting.popleft()
             scheduled_seqs.append(seq)
         if scheduled_seqs:
+            self.running.extend(scheduled_seqs)
             return scheduled_seqs, True
 
         # decode
@@ -68,6 +70,7 @@ class Scheduler:
             if (not seq.ignore_eos and token_id == self.eos) or seq.num_completion_tokens >= seq.max_tokens:
                 seq.status = SequenceStatus.FINISHED
                 self.block_manager.deallocate(seq)
-                self.running.remove(seq)
+                if seq in self.running:
+                    self.running.remove(seq)
 
 
