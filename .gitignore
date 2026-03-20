@@ -43,3 +43,6 @@ docs/
 
 # model weight
 models/
+
+# whl file
+*.whl
