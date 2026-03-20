@@ -1,8 +1,8 @@
 from collections import deque
 
+from turbo.config import ModelConfig
 from turbo.engine.block_manager import BlockManager
 from turbo.engine.sequence import Sequence, SequenceStatus
-from turbo.config import ModelConfig
 
 
 class Scheduler:
@@ -62,7 +62,7 @@ class Scheduler:
         self.running.extendleft(reversed(scheduled_seqs))
         return scheduled_seqs, False
 
-    def postprocess(self,seqs: list[Sequence], token_ids: list[int]) -> list(bool):
+    def postprocess(self,seqs: list[Sequence], token_ids: list[int]) -> None:
         for seq, token_id in zip(seqs, token_ids):
             seq.append_token(token_id)
             if (not seq.ignore_eos and token_id == self.eos) or seq.num_completion_tokens >= seq.max_tokens:

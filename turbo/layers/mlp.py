@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributed as dist
 
-from turbo.config import ModelConfig
+from turbo.config import HiddenAct, ModelConfig
+from turbo.layers.activation import SiluAndMul
+from turbo.layers.linear import MergedColumnParallelLinear, RowParallelLinear
 from turbo.utils.typing import Tensor3D
+
 
 class MLP(nn.Module):
     def __init__(self):
@@ -24,6 +27,31 @@ class DenseMLP(MLP):
     def forward(self, x: Tensor3D) -> Tensor3D:
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 
-class Qwen3ParallelMLP(MLP):
-    def __init__(self, config: ModelConfig) -> None:
+class ParallelMLP(MLP):
+    """merged gate and up"""
+    def __init__(
+            self,
+            hidden_size: int,
+            intermediate_size: int,
+            hidden_act: HiddenAct,
+    ) -> None:
         super().__init__()
+        self.hidden_size = hidden_size
+        self.intermediate_size = intermediate_size
+        self.gate_up_proj = MergedColumnParallelLinear(
+            self.hidden_size,
+            [self.intermediate_size] * 2,
+            bias=False,
+        )
+        self.down_proj = RowParallelLinear(
+            self.intermediate_size,
+            self.hidden_size,
+            bias=False
+        )
+        self.act = SiluAndMul()
+
+    def forward(self, x: Tensor3D) -> Tensor3D:
+        gate_up = self.gate_up_proj(x)
+        x = self.act(gate_up)
+        x = self.down_proj(x)
+        return x

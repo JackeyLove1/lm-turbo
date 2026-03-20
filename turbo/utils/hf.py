@@ -3,12 +3,14 @@ from __future__ import annotations
 import functools
 import os
 from enum import Enum
+from pathlib import Path
+import json
 
 from huggingface_hub import snapshot_download as hf_snapshot_download
 from modelscope.hub.snapshot_download import snapshot_download as modelscope_snapshot_download
 from tqdm.asyncio import tqdm
 from transformers import AutoConfig, AutoTokenizer, PretrainedConfig, PreTrainedTokenizerBase
-
+from turbo.config import ModelConfig
 
 class DownloadMethod(Enum):
     HF = "hf"
@@ -47,3 +49,4 @@ def download_hf_weight(model_path: str, method: DownloadMethod = DownloadMethod.
                 raise ValueError(f"Invalid download method: {method}")
     except Exception as e:
         raise ValueError(f"Failed to download model from {method}: {e}")
+

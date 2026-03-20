@@ -1,7 +1,11 @@
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributed as dist
+
+OUTPUT_DIM = 0
+INPUT_DIM = 1
+
 
 def div(numerator, denominator):
     assert numerator % denominator == 0
@@ -58,9 +62,9 @@ class ColumnParallelLinear(LinearBase):
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         param_data = param.data
-        shard_size = param_data.size(self.tp_dim)
+        shard_size = param_data.size(OUTPUT_DIM)
         start_idx = self.tp_rank * shard_size
-        loaded_weight = loaded_weight.narrow(self.tp_dim, start_idx, shard_size)
+        loaded_weight = loaded_weight.narrow(OUTPUT_DIM, start_idx, shard_size)
         param_data.copy_(loaded_weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -78,14 +82,15 @@ class RowParallelLinear(LinearBase):
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         param_data = param.data
-        shard_size = param_data.size(self.tp_dim)
+        shard_dim = INPUT_DIM if param_data.ndim > 1 else OUTPUT_DIM
+        shard_size = param_data.size(shard_dim)
         start_idx = self.tp_rank * shard_size
-        loaded_weight = loaded_weight.narrow(self.tp_dim, start_idx, shard_size)
+        loaded_weight = loaded_weight.narrow(shard_dim, start_idx, shard_size)
         param_data.copy_(loaded_weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = F.linear(x, self.weight)
-        if self.tp_size > 0:
+        if self.tp_size > 1:
             dist.all_reduce(tensor=y, op=dist.ReduceOp.SUM)
         return y
 
@@ -104,8 +109,8 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
         param_data = param.data
         shard_offset = sum(self.output_sizes[:loaded_shard_id]) // self.tp_size
         shard_size = self.output_sizes[loaded_shard_id] // self.tp_size
-        param_data = param_data.narrow(self.tp_dim, shard_offset, shard_size)
-        loaded_weight = loaded_weight.chunk(self.tp_size, self.tp_dim)[self.tp_rank]
+        param_data = param_data.narrow(OUTPUT_DIM, shard_offset, shard_size)
+        loaded_weight = loaded_weight.chunk(self.tp_size, dim=OUTPUT_DIM)[self.tp_rank]
         param_data.copy_(loaded_weight)
 
 class QKVParallelLinear(ColumnParallelLinear):
@@ -138,7 +143,7 @@ class QKVParallelLinear(ColumnParallelLinear):
         else:
             shard_size = self.num_kv_heads * self.head_size
             shard_offset = self.num_heads * self.head_size + self.num_kv_heads * self.head_size
-        param_data = param_data.narrow(self.tp_dim, shard_offset, shard_size)
-        loaded_weight = loaded_weight.chunk(self.tp_size, self.tp_dim)[self.tp_rank]
+        param_data = param_data.narrow(OUTPUT_DIM, shard_offset, shard_size)
+        loaded_weight = loaded_weight.chunk(self.tp_size, dim=OUTPUT_DIM)[self.tp_rank]
         param_data.copy_(loaded_weight)
 

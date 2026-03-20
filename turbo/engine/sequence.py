@@ -99,3 +99,11 @@ class Sequence:
             self.token_ids = state[-1]
         else:
             self.last_token = state[-1]
+
+    @num_prompt_tokens.setter
+    def num_prompt_tokens(self, value):
+        self._num_prompt_tokens = value
+
+    @num_cached_tokens.setter
+    def num_cached_tokens(self, value):
+        self._num_cached_tokens = value

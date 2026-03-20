@@ -23,7 +23,7 @@ class RotaryConfig:
     scaling: dict[str, Any] | None = None
 
 
-@dataclass(frozen=True)
+@dataclass
 class ModelConfig:
     num_layers: int
     num_qo_heads: int

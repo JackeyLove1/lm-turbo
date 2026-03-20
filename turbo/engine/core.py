@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional
-from contextlib import contextmanager
+
 import torch
 
 
@@ -72,7 +73,7 @@ class Batch:
 @dataclass
 class Context:
     # sglang mode
-    page_size: int
+    page_size: int = 32
     page_table: torch.Tensor = field(init=False)
     kv_cache: torch.Tensor = field(init=False)
     _batch: Batch | None = None
@@ -91,7 +92,7 @@ class Context:
     def batch(self) -> Batch:
         assert self._batch is not None, "No active batch in context"
         return self._batch
-    
+
     @contextmanager
     def forward_batch(self, batch: Batch):
         assert self._batch is None, "Cannot nest forward_batch calls, batch is None"
