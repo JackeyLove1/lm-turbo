@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from turbo.engine.core import get_vllm_context
-from turbo.model.config import ModelConfig
+from turbo.config import ModelConfig
 from turbo.utils.typing import Tensor2D, Tensor3D
 
 

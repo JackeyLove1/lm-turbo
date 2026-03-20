@@ -2,7 +2,7 @@ from collections import deque
 
 from turbo.engine.block_manager import BlockManager
 from turbo.engine.sequence import Sequence, SequenceStatus
-from turbo.model.config import ModelConfig
+from turbo.config import ModelConfig
 
 
 class Scheduler:

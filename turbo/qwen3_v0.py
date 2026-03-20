@@ -20,7 +20,7 @@ from turbo.layers.attention import GroupedAttentionLayer
 from turbo.layers.embedding import EmbeddingLayer, LMHeadLayer
 from turbo.layers.mlp import DenseMLP
 from turbo.layers.norm import RMSNorm
-from turbo.model.config import ModelConfig
+from turbo.config import ModelConfig
 from turbo.utils.hf import (
     DownloadMethod,
     cached_load_hf_config,

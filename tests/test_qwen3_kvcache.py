@@ -1,6 +1,6 @@
 import torch
 
-from turbo.model.config import HiddenAct, ModelConfig, RotaryConfig
+from turbo.config import HiddenAct, ModelConfig, RotaryConfig
 from turbo.qwen3 import Qwen3ForCausalLM
 
 

@@ -8,7 +8,7 @@ import torch.distributed as dist
 
 from turbo.engine.core import reset_vllm_context, set_vllm_context
 from turbo.engine.sequence import Sequence
-from turbo.model.config import ModelConfig
+from turbo.config import ModelConfig
 from turbo.qwen3 import load_model_from_hf
 
 

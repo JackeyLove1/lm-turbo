@@ -75,7 +75,7 @@ class Context:
     page_size: int
     page_table: torch.Tensor = field(init=False)
     kv_cache: torch.Tensor = field(init=False)
-    _batch: Batch | None = None = field(init=False)
+    _batch: Batch | None = None
 
     # vllm mode
     is_prefill: bool = False

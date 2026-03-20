@@ -4,7 +4,7 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 
-from turbo.model.config import ModelConfig
+from turbo.config import ModelConfig
 from turbo.utils.typing import AttentionTensor, Tensor2D
 
 
