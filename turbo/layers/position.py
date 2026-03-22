@@ -102,10 +102,14 @@ def apply_rotary_emb(
     cos: torch.Tensor,
     sin: torch.Tensor,
 ) -> torch.Tensor:
-    x1, x2 = torch.chunk(x.float(), 2, dim=-1)
+    if cos.dtype != x.dtype:
+        cos = cos.to(dtype=x.dtype)
+    if sin.dtype != x.dtype:
+        sin = sin.to(dtype=x.dtype)
+    x1, x2 = torch.chunk(x, 2, dim=-1)
     y1 = x1 * cos - x2 * sin
     y2 = x2 * cos + x1 * sin
-    return torch.cat((y1, y2), dim=-1).to(x.dtype)
+    return torch.cat((y1, y2), dim=-1)
 
 
 class RotaryEmbeddingV2(nn.Module):

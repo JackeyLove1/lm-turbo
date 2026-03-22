@@ -13,6 +13,7 @@ from turbo.engine.core import get_vllm_context
 from turbo.kvcache.base import KVCache
 from turbo.layers.norm import RMSNorm
 from turbo.layers.position import RotaryEmbedding
+from turbo.utils.arch import is_arch_supported
 from turbo.utils.typing import Tensor3D
 
 
@@ -151,6 +152,8 @@ def store_kvcache(
 
 
 class Attention(AttentionLayer):
+    _shared_workspaces: dict[str, torch.Tensor] = {}
+
     def __init__(
         self,
         num_heads,
@@ -166,14 +169,14 @@ class Attention(AttentionLayer):
         self.num_kv_heads = num_kv_heads
         self.page_size = page_size
         self.k_cache = self.v_cache = torch.tensor([])
-        self.register_buffer("_flashinfer_workspace", torch.empty(0, dtype=torch.uint8), persistent=False)
 
     def _get_workspace(self, device: torch.device) -> torch.Tensor:
-        workspace_size = 128 * 1024 * 1024
-        workspace = self._flashinfer_workspace
-        if workspace.device != device or workspace.numel() < workspace_size:
+        workspace_size = 32 * 1024 * 1024
+        key = str(device)
+        workspace = self._shared_workspaces.get(key)
+        if workspace is None or workspace.numel() < workspace_size:
             workspace = torch.zeros(workspace_size, dtype=torch.uint8, device=device)
-            self._flashinfer_workspace = workspace
+            self._shared_workspaces[key] = workspace
         return workspace
 
     def _view_cache_as_paged(self, cache: torch.Tensor) -> torch.Tensor:
@@ -197,6 +200,32 @@ class Attention(AttentionLayer):
             return x
         repeat = self.num_heads // self.num_kv_heads
         return x.repeat_interleave(repeat, dim=1)
+
+    def _build_paged_kv_metadata(
+        self,
+        context,
+        seq_lens: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        page_counts = ((seq_lens + self.page_size - 1) // self.page_size).to(torch.int32)
+        batch_size = int(seq_lens.numel())
+        indptr = torch.empty(batch_size + 1, dtype=torch.int32, device=seq_lens.device)
+        indptr[0] = 0
+        indptr[1:] = torch.cumsum(page_counts, dim=0)
+        last_page_len = ((seq_lens - 1).remainder(self.page_size) + 1).to(torch.int32)
+        total_pages = int(indptr[-1].item())
+        indices = torch.empty(total_pages, dtype=torch.int32, device=seq_lens.device)
+        cursor = 0
+        for row, num_pages in enumerate(page_counts.tolist()):
+            if num_pages <= 0:
+                continue
+            indices[cursor : cursor + num_pages] = context.block_tables[row, :num_pages].to(torch.int32)
+            cursor += num_pages
+        return indptr, indices, last_page_len
+
+    @staticmethod
+    def _use_paged_flashinfer() -> bool:
+        # FlashInfer paged-kv kernels are not yet stable on the current SM120 path.
+        return not is_arch_supported(12, 0)
 
     def _gather_paged_cache(
         self,
@@ -285,6 +314,71 @@ class Attention(AttentionLayer):
             )
         return torch.cat(outputs, dim=0)
 
+    def _paged_prefill_with_wrapper(
+        self,
+        q: torch.Tensor,
+        paged_k_cache: torch.Tensor,
+        paged_v_cache: torch.Tensor,
+        context,
+    ) -> torch.Tensor:
+        seq_lens = (context.cu_seqlens_k[1:] - context.cu_seqlens_k[:-1]).to(torch.int32)
+        qo_indptr = context.cu_seqlens_q.to(torch.int32)
+        indptr, indices, last_page_len = self._build_paged_kv_metadata(context, seq_lens)
+        wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(
+            self._get_workspace(q.device),
+            kv_layout="NHD",
+            backend="auto",
+        )
+        wrapper.plan(
+            qo_indptr,
+            indptr,
+            indices,
+            last_page_len,
+            self.num_heads,
+            self.num_kv_heads,
+            self.head_dim,
+            self.page_size,
+            causal=True,
+            sm_scale=self.scale,
+            q_data_type=q.dtype,
+            kv_data_type=paged_k_cache.dtype,
+            seq_lens=seq_lens,
+            seq_lens_q=(qo_indptr[1:] - qo_indptr[:-1]).to(torch.int32),
+            block_tables=context.block_tables.to(torch.int32),
+        )
+        return wrapper.run(q, (paged_k_cache, paged_v_cache))
+
+    def _paged_decode_with_wrapper(
+        self,
+        q: torch.Tensor,
+        paged_k_cache: torch.Tensor,
+        paged_v_cache: torch.Tensor,
+        context,
+    ) -> torch.Tensor:
+        seq_lens = context.context_lens.to(torch.int32)
+        indptr, indices, last_page_len = self._build_paged_kv_metadata(context, seq_lens)
+        wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(
+            self._get_workspace(q.device),
+            kv_layout="NHD",
+            use_tensor_cores=True,
+            backend="auto",
+        )
+        wrapper.plan(
+            indptr,
+            indices,
+            last_page_len,
+            self.num_heads,
+            self.num_kv_heads,
+            self.head_dim,
+            self.page_size,
+            q_data_type=q.dtype,
+            kv_data_type=paged_k_cache.dtype,
+            sm_scale=self.scale,
+            block_tables=context.block_tables.to(torch.int32),
+            seq_lens=seq_lens,
+        )
+        return wrapper.run(q, (paged_k_cache, paged_v_cache), q_len_per_req=1)
+
     @staticmethod
     def _get_max_seqlen(context, q: bool) -> int:
         preferred = "max_seqlen_q" if q else "max_seqlen_k"
@@ -310,30 +404,17 @@ class Attention(AttentionLayer):
             if context.block_tables is None:
                 o = self._prefill_without_prefix_cache(q, k, v, context)
             else:    # prefix cache / paged kv cache
-                workspace = self._get_workspace(q.device)
                 paged_k_cache = self._view_cache_as_paged(k_cache)
                 paged_v_cache = self._view_cache_as_paged(v_cache)
-                seq_lens = (context.cu_seqlens_k[1:] - context.cu_seqlens_k[:-1]).to(torch.int32)
-                try:
-                    o = flashinfer.prefill.trtllm_batch_context_with_kv_cache(
-                        query=q,
-                        kv_cache=(paged_k_cache, paged_v_cache),
-                        workspace_buffer=workspace,
-                        block_tables=context.block_tables.to(torch.int32),
-                        seq_lens=seq_lens,
-                        max_q_len=self._get_max_seqlen(context, q=True),
-                        max_kv_len=self._get_max_seqlen(context, q=False),
-                        bmm1_scale=self.scale,
-                        bmm2_scale=1.0,
-                        batch_size=context.block_tables.shape[0],
-                        cum_seq_lens_q=context.cu_seqlens_q.to(torch.int32),
-                        cum_seq_lens_kv=context.cu_seqlens_k.to(torch.int32),
-                        kv_layout="NHD",
-                    )
-                except RuntimeError as exc:
-                    if "Unsupported architecture" not in str(exc):
-                        raise
+                if not self._use_paged_flashinfer():
                     o = self._fallback_paged_prefill(q, paged_k_cache, paged_v_cache, context)
+                else:
+                    try:
+                        o = self._paged_prefill_with_wrapper(q, paged_k_cache, paged_v_cache, context)
+                    except (RuntimeError, ValueError) as exc:
+                        if "Unsupported architecture" not in str(exc) and "This device is not supported" not in str(exc):
+                            raise
+                        o = self._fallback_paged_prefill(q, paged_k_cache, paged_v_cache, context)
         else:    # decode
             if context.block_tables is None:
                 if q.shape[0] != 1:
@@ -349,25 +430,15 @@ class Attention(AttentionLayer):
                     sm_scale=self.scale,
                 ).unsqueeze(0)
             else:
-                workspace = self._get_workspace(q.device)
                 paged_k_cache = self._view_cache_as_paged(k_cache)
                 paged_v_cache = self._view_cache_as_paged(v_cache)
-                seq_lens = context.context_lens.to(torch.int32)
-                try:
-                    o = flashinfer.decode.trtllm_batch_decode_with_kv_cache(
-                        query=q,
-                        kv_cache=(paged_k_cache, paged_v_cache),
-                        workspace_buffer=workspace,
-                        block_tables=context.block_tables.to(torch.int32),
-                        seq_lens=seq_lens,
-                        max_seq_len=int(seq_lens.max().item()),
-                        bmm1_scale=self.scale,
-                        bmm2_scale=1.0,
-                        kv_layout="NHD",
-                        q_len_per_req=1,
-                    )
-                except RuntimeError as exc:
-                    if "Unsupported architecture" not in str(exc):
-                        raise
+                if not self._use_paged_flashinfer():
                     o = self._fallback_paged_decode(q, paged_k_cache, paged_v_cache, context)
+                else:
+                    try:
+                        o = self._paged_decode_with_wrapper(q, paged_k_cache, paged_v_cache, context)
+                    except (RuntimeError, ValueError) as exc:
+                        if "Unsupported architecture" not in str(exc) and "This device is not supported" not in str(exc):
+                            raise
+                        o = self._fallback_paged_decode(q, paged_k_cache, paged_v_cache, context)
         return o
